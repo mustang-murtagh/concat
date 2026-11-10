@@ -233,7 +233,10 @@ mod tests {
     }
 
     fn texts(captions: &[Caption]) -> Vec<&str> {
-        captions.iter().map(|caption| caption.text.as_str()).collect()
+        captions
+            .iter()
+            .map(|caption| caption.text.as_str())
+            .collect()
     }
 
     #[test]
@@ -254,7 +257,10 @@ mod tests {
         }
         // A wide frame holds more of it on a line.
         let wide = lay_out(&words, 40, 10.0, &captions(CaptionMode::Phrase));
-        assert_eq!(texts(&wide), ["Here is the thing", "nobody reads the manual", "Ever"]);
+        assert_eq!(
+            texts(&wide),
+            ["Here is the thing", "nobody reads the manual", "Ever"]
+        );
     }
 
     #[test]
@@ -316,14 +322,20 @@ mod tests {
             uppercase: true,
             ..captions(CaptionMode::Phrase)
         };
-        assert_eq!(texts(&lay_out(&words, 40, 10.0, &kept)), ["REALLY?", "YES, IT WORKS."]);
+        assert_eq!(
+            texts(&lay_out(&words, 40, 10.0, &kept)),
+            ["REALLY?", "YES, IT WORKS."]
+        );
     }
 
     #[test]
     fn nothing_is_shown_past_the_end_of_the_clip() {
         let words = said("one two three four five six", 0.0, 1.0);
         let laid = lay_out(&words, 40, 3.5, &captions(CaptionMode::Phrase));
-        assert!(laid.iter().all(|caption| caption.end <= 3.5 + 1e-9), "{laid:?}");
+        assert!(
+            laid.iter().all(|caption| caption.end <= 3.5 + 1e-9),
+            "{laid:?}"
+        );
         assert!(lay_out(&[], 40, 3.5, &captions(CaptionMode::Phrase)).is_empty());
     }
 }

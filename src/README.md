@@ -17,6 +17,7 @@ The video engine behind Concat. Rust, no GC, no hidden control flow.
 | `concat-cli` | A binary to drive the above: `probe`, `render`, `api` (the API over stdin and stdout) and `serve` (the API on a socket). | `concat-server`, `concat-api`, the engine crates |
 | `concat-host` | What the window needs that is not the edit: sessions, project folders, previews, playback, templates, job slots. | `concat-media`, `concat-project`, `concat-export`, cpal |
 | `concat-speech` | Transcription (whisper.cpp, in-process) and text to speech (Kokoro via sherpa-onnx). | `concat-host`, `concat-media`, whisper-rs, sherpa-onnx |
+| `concat-shorts` | Long recordings into short clips: fetch, transcribe word by word, find the pauses, suggest the moments, then build each approved clip as a project from the API's own edit commands and export it in every frame shape. Served as the `shorts_` tools of the MCP server. See `docs/SHORTS.md`. | `concat-api`, `concat-speech`, `concat-media`, `concat-vision`, `concat-host` |
 | `concat` | The editor window: every pane, dialog and primitive, in Slint. The app a user launches. | slint, `concat-host`, `concat-speech` |
 | `concat-android` | The Android activity: the entry point that hosts the window on a phone. | `concat`, slint |
 
@@ -27,6 +28,7 @@ concat -> concat-speech -> concat-host -> {export, project, media} -> core
                                        -> render -> core
                                           export -> effects -> project
 concat-cli -> concat-server -> concat-api -> concat-host
+concat-mcp -> concat-shorts -> {concat-api, concat-speech}
 ```
 
 If you ever find yourself wanting `core` to depend on `media`, something has

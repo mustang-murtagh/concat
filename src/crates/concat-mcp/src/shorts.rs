@@ -395,7 +395,9 @@ impl Arguments {
         match self.take(key) {
             None => Ok(None),
             Some(Value::String(text)) => Ok(Some(text)),
-            Some(_) => Err(ApiError::invalid(format!("invalid arguments: `{key}` is a string"))),
+            Some(_) => Err(ApiError::invalid(format!(
+                "invalid arguments: `{key}` is a string"
+            ))),
         }
     }
 
@@ -412,7 +414,9 @@ impl Arguments {
                 .as_f64()
                 .filter(|number| number.is_finite())
                 .map(Some)
-                .ok_or_else(|| ApiError::invalid(format!("invalid arguments: `{key}` is a number"))),
+                .ok_or_else(|| {
+                    ApiError::invalid(format!("invalid arguments: `{key}` is a number"))
+                }),
         }
     }
 
@@ -512,7 +516,9 @@ fn clip_spec(value: Value, number: usize) -> Result<ClipSpec, ApiError> {
         None => None,
         Some(Value::Null) => Some(None),
         Some(value) => Some(Some(value.as_f64().ok_or_else(|| {
-            ApiError::invalid(format!("invalid arguments: clip {number}: `focusX` is a number or null"))
+            ApiError::invalid(format!(
+                "invalid arguments: clip {number}: `focusX` is a number or null"
+            ))
         })?)),
     };
     let mut fields = Arguments(fields);
@@ -522,7 +528,11 @@ fn clip_spec(value: Value, number: usize) -> Result<ClipSpec, ApiError> {
         start: fields.time("start")?,
         end: fields.time("end")?,
         title: fields.text("title")?,
-        framing: fields.text("framing")?.as_deref().map(framing).transpose()?,
+        framing: fields
+            .text("framing")?
+            .as_deref()
+            .map(framing)
+            .transpose()?,
         focus_x,
         approved: fields.flag("approved")?,
         exact: fields.flag("exact")?.unwrap_or(false),
@@ -543,7 +553,8 @@ fn next(job: &Job) -> String {
             return "Preparing failed; `error` says why. Fix that and call shorts_start with this job's id to try again.".to_owned();
         }
         Stage::Cancelled => {
-            return "Preparing was cancelled. Call shorts_start with this job's id to carry on.".to_owned();
+            return "Preparing was cancelled. Call shorts_start with this job's id to carry on."
+                .to_owned();
         }
         stage if stage.working() => {
             return "Still being prepared: call shorts_wait with this job's id.".to_owned();
@@ -571,7 +582,8 @@ fn next(job: &Job) -> String {
             .any(|render| render.clip == clip && render.state == RenderState::Done)
     };
     if exporting {
-        return "A render is under way: call shorts_render again to carry on watching it.".to_owned();
+        return "A render is under way: call shorts_render again to carry on watching it."
+            .to_owned();
     }
     if job.clips.is_empty() {
         return "No moments were suggested. Read shorts_transcript and add clips by their times with shorts_clips, or try shorts_suggest with a shorter minSeconds.".to_owned();
@@ -860,7 +872,9 @@ impl Shorts {
                 let id = arguments.required_text("job")?;
                 let settings = studio.settings().map_err(refusal)?;
                 let rules = ClipRules {
-                    max_clips: arguments.count("count")?.unwrap_or(settings.clips.max_clips),
+                    max_clips: arguments
+                        .count("count")?
+                        .unwrap_or(settings.clips.max_clips),
                     min_seconds: arguments
                         .number("minSeconds")?
                         .unwrap_or(settings.clips.min_seconds),
@@ -957,9 +971,9 @@ impl Shorts {
                 })))
             }
             Kind::SettingsUpdate => {
-                let patch = arguments.take("patch").ok_or_else(|| {
-                    ApiError::invalid("invalid arguments: missing field `patch`")
-                })?;
+                let patch = arguments
+                    .take("patch")
+                    .ok_or_else(|| ApiError::invalid("invalid arguments: missing field `patch`"))?;
                 arguments.done()?;
                 let settings = studio.update_settings(&patch).map_err(refusal)?;
                 Ok(Outcome::json(json!({
@@ -977,7 +991,11 @@ mod tests {
     use concat_shorts::plan::{Clip, Origin};
 
     fn job_with(verdicts: &[Verdict]) -> Job {
-        let mut job = Job::begin("talk-1a2b".to_owned(), "/v/talk.mp4".to_owned(), SourceType::Auto);
+        let mut job = Job::begin(
+            "talk-1a2b".to_owned(),
+            "/v/talk.mp4".to_owned(),
+            SourceType::Auto,
+        );
         job.stage = Stage::Ready;
         for verdict in verdicts {
             let id = job.mint_clip();

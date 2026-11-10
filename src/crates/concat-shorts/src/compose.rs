@@ -158,7 +158,11 @@ fn pieces(view: &Value, media: &str) -> Result<Vec<(String, f64, f64)>, Error> {
 /// fits (60 to 30, 59.94 to 29.97) and by taking `most` otherwise. The
 /// broadcast rates keep their thousand-and-oneths.
 pub fn rate(fps: f64, most: f64) -> (i64, i64) {
-    let mut fps = if fps.is_finite() && fps >= 1.0 { fps } else { 30.0 };
+    let mut fps = if fps.is_finite() && fps >= 1.0 {
+        fps
+    } else {
+        30.0
+    };
     if fps > most + 0.5 {
         fps = if fps / 2.0 <= most + 0.5 && fps / 2.0 >= 20.0 {
             fps / 2.0
@@ -324,7 +328,10 @@ pub fn build(engine: &mut dyn Engine, brief: &Brief<'_>) -> Result<Built, Error>
     }
     let media_file = brief.media.to_string_lossy().into_owned();
     std::fs::create_dir_all(brief.location).map_err(|error| {
-        Error::Failed(format!("could not make {}: {error}", brief.location.display()))
+        Error::Failed(format!(
+            "could not make {}: {error}",
+            brief.location.display()
+        ))
     })?;
 
     // 1. The project, the recording in it and on its main lane.
@@ -730,7 +737,14 @@ fn end_card(
         let letters = headline.chars().count().max(1) as f64;
         let size = (0.085 * unit).min(column / letters / 0.56 * 0.7);
         titles.push((
-            line(headline, &card.headline_font, card.headline_weight, size, 0.0, rule_y - size * 1.25),
+            line(
+                headline,
+                &card.headline_font,
+                card.headline_weight,
+                size,
+                0.0,
+                rule_y - size * 1.25,
+            ),
             left,
         ));
     }
@@ -740,7 +754,10 @@ fn end_card(
         if text.is_empty() {
             continue;
         }
-        titles.push((line(text, &card.font, 500.0, small, small * 0.2, below), left));
+        titles.push((
+            line(text, &card.font, 500.0, small, small * 0.2, below),
+            left,
+        ));
         below += small * 2.6;
     }
     // The rule, as wide as the text column.
@@ -792,7 +809,14 @@ fn end_card(
         if width * aspect / logo_aspect > tallest {
             width = tallest * logo_aspect / aspect;
         }
-        let (scale, _, _) = logo_place(*size, (format.width, format.height), width, 0.0, 0.0, Corner::TopLeft);
+        let (scale, _, _) = logo_place(
+            *size,
+            (format.width, format.height),
+            width,
+            0.0,
+            0.0,
+            Corner::TopLeft,
+        );
         let height = width * aspect / logo_aspect;
         edit(
             engine,
@@ -875,7 +899,10 @@ mod tests {
         let mut bare = settings.clone();
         bare.captions.plate = String::new();
         bare.captions.mode = CaptionMode::Phrase;
-        let lit = Caption { dim: None, ..caption };
+        let lit = Caption {
+            dim: None,
+            ..caption
+        };
         let style = caption_style(&lit, format, &bare);
         assert_eq!(style["background"], "");
         assert!(style["strokeWidth"].as_f64().expect("a width") > 0.0);
@@ -893,7 +920,14 @@ mod tests {
         let expected = -(0.5 - 54.0 / 1920.0 - 81.0 / 1920.0 / 2.0);
         assert!((y - expected).abs() < 1e-9, "{y}");
         // The other corners mirror it, and an inset pushes it in.
-        let (_, left, bottom) = logo_place((800, 200), (1080, 1920), 0.3, 0.05, 0.06, Corner::BottomLeft);
+        let (_, left, bottom) = logo_place(
+            (800, 200),
+            (1080, 1920),
+            0.3,
+            0.05,
+            0.06,
+            Corner::BottomLeft,
+        );
         assert!((left + x).abs() < 1e-9);
         assert!((bottom - (-y - 0.06)).abs() < 1e-9, "{bottom}");
         // A square logo in a wide frame is fitted to the height.

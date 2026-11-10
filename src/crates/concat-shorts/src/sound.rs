@@ -166,11 +166,15 @@ pub fn threshold(levels: &[f32]) -> Option<f32> {
     }
     // Well under the speech, but clear of the floor: in a noisy room the
     // floor is not far down, and the line sits just above it.
-    Some((speech - UNDER_SPEECH).max(floor + 5.0).min(speech - LEAST_GAP + 2.0))
+    Some(
+        (speech - UNDER_SPEECH)
+            .max(floor + 5.0)
+            .min(speech - LEAST_GAP + 2.0),
+    )
 }
 
 /// The quiet spans in `levels`: runs under the recording's threshold, with
-/// clicks inside them ignored, at least [`SHORTEST_QUIET`] long.
+/// clicks inside them ignored, at least a quarter of a second long.
 pub fn quiet(levels: &[f32]) -> Quiet {
     let Some(threshold) = threshold(levels) else {
         return Quiet::default();
@@ -356,7 +360,10 @@ pub(crate) mod tests {
         let levels = recording(60.0, &[(10.0, 12.0), (30.0, 30.1), (40.0, 41.0)]);
         let found = quiet(&levels);
         // The tenth of a second is too short to be a pause.
-        assert!(close(&found.spans, &[(10.0, 12.0), (40.0, 41.0)]), "{found:?}");
+        assert!(
+            close(&found.spans, &[(10.0, 12.0), (40.0, 41.0)]),
+            "{found:?}"
+        );
 
         // The same shape 30 dB down is the same pauses.
         let soft: Vec<f32> = levels.iter().map(|level| level - 30.0).collect();

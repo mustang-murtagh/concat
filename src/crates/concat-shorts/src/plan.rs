@@ -438,7 +438,10 @@ mod tests {
         folder.save(&job).expect("saves");
         let back = folder.load().expect("loads");
         assert_eq!(back, job);
-        assert_eq!(back.render("c1", "vertical").map(|render| render.state), Some(RenderState::Done));
+        assert_eq!(
+            back.render("c1", "vertical").map(|render| render.state),
+            Some(RenderState::Done)
+        );
         assert_eq!(back.render("c1", "square"), None);
         assert_eq!(job.mint_clip(), "c2");
     }

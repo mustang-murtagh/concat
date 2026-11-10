@@ -316,10 +316,7 @@ pub fn transcribe(
             JobStage::Loading => progress(None, "loading the speech model"),
             JobStage::Working { done, .. } => {
                 let done = f64::from(done).clamp(0.0, 1.0);
-                progress(
-                    Some(done),
-                    &format!("transcribing, {:.0}%", done * 100.0),
-                );
+                progress(Some(done), &format!("transcribing, {:.0}%", done * 100.0));
             }
         })
         .map_err(Error::Failed)?;
@@ -457,7 +454,10 @@ pub(crate) mod tests {
     fn a_page_is_sentences_with_their_times_and_says_where_the_next_starts() {
         let transcript = spoken("First thing. Second thing. Third thing.", 59.0, 0.5, 0.5);
         let (all, next) = transcript.page(0.0, f64::MAX, 10_000);
-        assert_eq!(all, "[0:59] First thing.\n[1:00] Second thing.\n[1:02] Third thing.\n");
+        assert_eq!(
+            all,
+            "[0:59] First thing.\n[1:00] Second thing.\n[1:02] Third thing.\n"
+        );
         assert_eq!(next, None);
         let (first, next) = transcript.page(0.0, f64::MAX, 30);
         assert_eq!(first, "[0:59] First thing.\n");
@@ -477,9 +477,21 @@ pub(crate) mod tests {
             model: "test".to_owned(),
             duration: 4.5,
             words: vec![
-                Word { start: 2.0, end: 2.25, text: "Saved".to_owned() },
-                Word { start: 2.5, end: 2.75, text: "and".to_owned() },
-                Word { start: 3.0, end: 3.5, text: "read.".to_owned() },
+                Word {
+                    start: 2.0,
+                    end: 2.25,
+                    text: "Saved".to_owned(),
+                },
+                Word {
+                    start: 2.5,
+                    end: 2.75,
+                    text: "and".to_owned(),
+                },
+                Word {
+                    start: 3.0,
+                    end: 3.5,
+                    text: "read.".to_owned(),
+                },
             ],
         };
         transcript.save(&path).expect("saves");

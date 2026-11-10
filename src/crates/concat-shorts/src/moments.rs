@@ -156,15 +156,103 @@ const NUMBERS: &[&str] = &[
 ];
 /// Words too common to say what a stretch is about.
 const COMMON: &[&str] = &[
-    "about", "after", "again", "also", "always", "another", "around", "because", "been", "before",
-    "being", "both", "came", "come", "could", "does", "doing", "done", "down", "each", "even",
-    "every", "from", "going", "good", "have", "having", "here", "into", "just", "kind", "know",
-    "like", "little", "look", "made", "make", "many", "maybe", "mean", "more", "most", "much",
-    "need", "never", "okay", "only", "other", "over", "people", "really", "right", "said", "same",
-    "say", "should", "some", "something", "sort", "still", "such", "take", "than", "that", "their",
-    "them", "then", "there", "these", "they", "thing", "things", "think", "this", "those",
-    "through", "time", "very", "want", "well", "were", "what", "when", "where", "which", "while",
-    "will", "with", "would", "yeah", "your", "you're", "that's", "don't", "it's", "we're", "i'm",
+    "about",
+    "after",
+    "again",
+    "also",
+    "always",
+    "another",
+    "around",
+    "because",
+    "been",
+    "before",
+    "being",
+    "both",
+    "came",
+    "come",
+    "could",
+    "does",
+    "doing",
+    "done",
+    "down",
+    "each",
+    "even",
+    "every",
+    "from",
+    "going",
+    "good",
+    "have",
+    "having",
+    "here",
+    "into",
+    "just",
+    "kind",
+    "know",
+    "like",
+    "little",
+    "look",
+    "made",
+    "make",
+    "many",
+    "maybe",
+    "mean",
+    "more",
+    "most",
+    "much",
+    "need",
+    "never",
+    "okay",
+    "only",
+    "other",
+    "over",
+    "people",
+    "really",
+    "right",
+    "said",
+    "same",
+    "say",
+    "should",
+    "some",
+    "something",
+    "sort",
+    "still",
+    "such",
+    "take",
+    "than",
+    "that",
+    "their",
+    "them",
+    "then",
+    "there",
+    "these",
+    "they",
+    "thing",
+    "things",
+    "think",
+    "this",
+    "those",
+    "through",
+    "time",
+    "very",
+    "want",
+    "well",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "will",
+    "with",
+    "would",
+    "yeah",
+    "your",
+    "you're",
+    "that's",
+    "don't",
+    "it's",
+    "we're",
+    "i'm",
 ];
 
 /// A word as it is compared: lowercase, with the punctuation around it
@@ -210,7 +298,10 @@ fn opening(sentence: &str) -> (f64, Option<&'static str>) {
         score += 0.25;
         why = Some("opens on a question");
     }
-    if words.iter().any(|word| word == "you" || word == "your" || word == "you're") {
+    if words
+        .iter()
+        .any(|word| word == "you" || word == "your" || word == "you're")
+    {
         score += 0.1;
     }
     if words
@@ -260,7 +351,11 @@ fn closing(sentence: &str, pause: f64, next: Option<&str>) -> f64 {
         score += 0.15;
     }
     if let Some(next) = next {
-        let first = next.split_whitespace().next().map(plain).unwrap_or_default();
+        let first = next
+            .split_whitespace()
+            .next()
+            .map(plain)
+            .unwrap_or_default();
         if CONTINUES.contains(&first.as_str()) {
             score -= 0.3;
         }
@@ -306,8 +401,8 @@ pub fn title_of(line: &str, limit: usize) -> String {
     // on the next one: "give up on a".
     if words.len() >= limit {
         const LEANING: &[&str] = &[
-            "a", "an", "the", "of", "on", "in", "to", "is", "and", "or", "for", "with", "at",
-            "by", "that", "from", "as", "your", "my", "this", "it's",
+            "a", "an", "the", "of", "on", "in", "to", "is", "and", "or", "for", "with", "at", "by",
+            "that", "from", "as", "your", "my", "this", "it's",
         ];
         while words.len() > 3
             && words
@@ -465,7 +560,13 @@ pub fn suggest(
                 continue;
             }
             candidates.push(weigh(
-                transcript, &sentences, &rarity, first, last, &tightened, pause_before(first),
+                transcript,
+                &sentences,
+                &rarity,
+                first,
+                last,
+                &tightened,
+                pause_before(first),
                 pause_after(last),
             ));
         }
@@ -494,7 +595,13 @@ pub fn suggest(
             return Vec::new();
         }
         candidates.push(weigh(
-            transcript, &sentences, &rarity, first, last, &tightened, pause_before(first),
+            transcript,
+            &sentences,
+            &rarity,
+            first,
+            last,
+            &tightened,
+            pause_before(first),
             pause_after(last),
         ));
     }
@@ -579,8 +686,14 @@ fn weigh(
     Candidate {
         first,
         last,
-        start: tightened.kept.first().map_or(sentences[first].start, |kept| kept.0),
-        end: tightened.kept.last().map_or(sentences[last].end, |kept| kept.1),
+        start: tightened
+            .kept
+            .first()
+            .map_or(sentences[first].start, |kept| kept.0),
+        end: tightened
+            .kept
+            .last()
+            .map_or(sentences[last].end, |kept| kept.1),
         length,
         removed: tightened.removed(),
         words: words.len(),
@@ -623,7 +736,10 @@ mod tests {
         let (plain, _) = opening("We went through the settings on the second page.");
         let (carried, why) = opening("And then it stopped working for the whole team.");
         assert_eq!(why, None);
-        assert!(question > plain && promise > plain, "{question} {promise} {plain}");
+        assert!(
+            question > plain && promise > plain,
+            "{question} {promise} {plain}"
+        );
         assert!(plain > carried, "{plain} {carried}");
         // "stopped" is not the promise "stop".
         assert_eq!(opening("Stopped it was by then.").1, None);
@@ -649,7 +765,10 @@ mod tests {
 
     #[test]
     fn a_title_is_the_opening_words_without_punctuation() {
-        assert_eq!(title_of("here's the thing, nobody reads the manual.", 8), "Here's the thing");
+        assert_eq!(
+            title_of("here's the thing, nobody reads the manual.", 8),
+            "Here's the thing"
+        );
         assert_eq!(
             title_of("Why do most people get this wrong every single time?", 8),
             "Why do most people get this wrong every"
@@ -666,7 +785,13 @@ mod tests {
     /// pause between parts; about 20 seconds a part.
     fn talk(topics: usize) -> (Transcript, Quiet) {
         let subjects = [
-            "prompts", "meetings", "spreadsheets", "inboxes", "calendars", "reports", "budgets",
+            "prompts",
+            "meetings",
+            "spreadsheets",
+            "inboxes",
+            "calendars",
+            "reports",
+            "budgets",
             "proposals",
         ];
         let mut text = String::new();
@@ -710,7 +835,15 @@ mod tests {
     #[test]
     fn a_recording_with_no_words_has_no_suggestions() {
         let silent = Transcript::default();
-        assert!(suggest(&silent, &Quiet::default(), &rules(60.0, 90.0, 6), &tighten()).is_empty());
+        assert!(
+            suggest(
+                &silent,
+                &Quiet::default(),
+                &rules(60.0, 90.0, 6),
+                &tighten()
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -735,12 +868,21 @@ mod tests {
         assert_eq!(moments.len(), 1, "{moments:?}");
         assert!(moments[0].end - moments[0].start > 45.0);
         assert!(moments[0].length <= 45.0);
-        assert!(moments[0].reason.contains("pauses cut"), "{}", moments[0].reason);
+        assert!(
+            moments[0].reason.contains("pauses cut"),
+            "{}",
+            moments[0].reason
+        );
     }
 
     #[test]
     fn a_chosen_stretch_is_described_from_its_words() {
-        let transcript = spoken("Skip this. Here is the part that matters. And more.", 0.0, 1.0, 0.0);
+        let transcript = spoken(
+            "Skip this. Here is the part that matters. And more.",
+            0.0,
+            1.0,
+            0.0,
+        );
         let (title, hook) = describe(&transcript, 2.0, 9.0);
         assert_eq!(hook, "Here is the part that matters.");
         assert_eq!(title, "Here is the part that matters");

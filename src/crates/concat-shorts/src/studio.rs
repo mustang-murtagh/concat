@@ -509,11 +509,9 @@ impl Studio {
         }
         for (number, spec) in specs.into_iter().enumerate() {
             let existing = match &spec.id {
-                Some(id) => Some(
-                    job.clip(id)
-                        .cloned()
-                        .ok_or_else(|| Error::NotFound(format!("there is no clip {id} in this job")))?,
-                ),
+                Some(id) => Some(job.clip(id).cloned().ok_or_else(|| {
+                    Error::NotFound(format!("there is no clip {id} in this job"))
+                })?),
                 None => None,
             };
             let start = spec.start.or(existing.as_ref().map(|clip| clip.start));
@@ -574,7 +572,9 @@ impl Studio {
                     let framing = spec.framing.unwrap_or(old.framing);
                     let focus_x = spec.focus_x.unwrap_or(old.focus_x);
                     let reframed = framing != old.framing || focus_x != old.focus_x;
-                    let retitled = given_title.as_ref().is_some_and(|title| *title != old.title);
+                    let retitled = given_title
+                        .as_ref()
+                        .is_some_and(|title| *title != old.title);
                     let clip_id = old.id.clone();
                     let Some(clip) = job.clip_mut(&clip_id) else {
                         continue;
@@ -636,7 +636,10 @@ impl Studio {
             }
         }
         for clip in &job.clips {
-            if clip.focus_x.is_some_and(|focus| !(0.0..=1.0).contains(&focus)) {
+            if clip
+                .focus_x
+                .is_some_and(|focus| !(0.0..=1.0).contains(&focus))
+            {
                 return Err(Error::Invalid(format!(
                     "clip {}: focusX is 0 (left) to 1 (right)",
                     clip.id
@@ -773,7 +776,8 @@ impl Studio {
             }),
             (None, seen) => seen,
         };
-        let placement = framing::place(picture, frame, choice, settings.reframe.mode, seen.as_ref());
+        let placement =
+            framing::place(picture, frame, choice, settings.reframe.mode, seen.as_ref());
         notes.insert(
             0,
             match (placement, same_shape, seen.map(|look| look.subject)) {
@@ -785,6 +789,9 @@ impl Studio {
                     "shown whole over a blurred copy: there are people across the width of the picture".to_owned()
                 }
                 (Placement::Fit, _, _) => "shown whole over a blurred copy".to_owned(),
+                (Placement::Fill { .. }, _, _) if clip.focus_x.is_some() => {
+                    "cropped in, centred where it was set by hand".to_owned()
+                }
                 (Placement::Fill { .. }, _, Some(Subject::Person)) => {
                     "cropped in on the speaker".to_owned()
                 }
@@ -859,9 +866,9 @@ impl Studio {
         let clips: Vec<String> = match &options.clips {
             Some(ids) => {
                 for id in ids {
-                    let clip = job
-                        .clip(id)
-                        .ok_or_else(|| Error::NotFound(format!("there is no clip {id} in this job")))?;
+                    let clip = job.clip(id).ok_or_else(|| {
+                        Error::NotFound(format!("there is no clip {id} in this job"))
+                    })?;
                     if clip.verdict != Verdict::Approved {
                         return Err(Error::Invalid(format!(
                             "clip {id} is not approved; approve it first"
@@ -939,14 +946,24 @@ impl Studio {
             let label = format!("{title} ({})", format.label);
 
             // Build and start the export, unless one is under way.
-            let exporting = job
-                .render(clip_id, format_id)
-                .is_some_and(|render| render.state == RenderState::Exporting && render.export.is_some());
+            let exporting = job.render(clip_id, format_id).is_some_and(|render| {
+                render.state == RenderState::Exporting && render.export.is_some()
+            });
             if !exporting {
                 if Instant::now() >= until || cancelled.load(Ordering::Relaxed) {
                     return Ok(job);
                 }
                 report(done, 0.0, format!("building {label}"));
+                // The project a render of this clip in this shape left
+                // before is replaced by the new one: it is this tool's own,
+                // in the job's projects folder, and what it held is about
+                // to be rebuilt.
+                if let Some(stale) = job
+                    .render(clip_id, format_id)
+                    .and_then(|render| render.project.clone())
+                {
+                    discard_project(engine, &folder, &stale);
+                }
                 let name = free_name(&folder.projects(), &format!("{clip_id}-{format_id}"));
                 let output = output_path(&folder, &job, clip_id, &title, format_id);
                 let started = self
@@ -1012,10 +1029,28 @@ impl Studio {
             loop {
                 let (export, project) = {
                     let render = job.render_mut(clip_id, format_id);
-                    (render.export.clone().unwrap_or_default(), render.project.clone())
+                    (
+                        render.export.clone().unwrap_or_default(),
+                        render.project.clone(),
+                    )
                 };
                 let status =
-                    compose::call(engine, json!({ "method": "export.status", "job": export }));
+                    compose::call(engine, json!({ "method": "export.status", "job": export }))
+                        .and_then(|status| {
+                            // An engine restarted since names its exports
+                            // from the start again: a job of this name that
+                            // is rendering some other project is not this
+                            // one.
+                            let same = match (&project, status["path"].as_str()) {
+                                (Some(project), Some(path)) => project == path,
+                                _ => true,
+                            };
+                            if same {
+                                Ok(status)
+                            } else {
+                                Err(Error::Failed("the engine was restarted".to_owned()))
+                            }
+                        });
                 let ended = match &status {
                     Ok(status) => {
                         let state = status["state"].as_str().unwrap_or_default();
@@ -1035,7 +1070,10 @@ impl Studio {
                         } else if state == "done" {
                             Some(Ok(()))
                         } else if state == "cancelled" {
-                            Some(Err((RenderState::Cancelled, "the export was cancelled".to_owned())))
+                            Some(Err((
+                                RenderState::Cancelled,
+                                "the export was cancelled".to_owned(),
+                            )))
                         } else {
                             Some(Err((
                                 RenderState::Failed,
@@ -1105,7 +1143,10 @@ impl Studio {
             .format(format_id)
             .cloned()
             .ok_or_else(|| Error::NotFound(format!("there is no format {format_id:?}")))?;
-        let name = free_name(&folder.projects(), &format!("preview-{clip_id}-{format_id}"));
+        let name = free_name(
+            &folder.projects(),
+            &format!("preview-{clip_id}-{format_id}"),
+        );
         let (built, note) = self.build(
             engine, &folder, &mut job, &material, &settings, clip_id, &format, &name, cancelled,
         )?;
@@ -1125,16 +1166,9 @@ impl Studio {
                 "height": even(format.height),
             }),
         );
-        let _ = compose::call(
-            engine,
-            json!({ "method": "project.close", "path": built.project, "save": false }),
-        );
         // A preview's project is scratch: made a moment ago, by this, in
-        // the job's own projects folder, under a name that says so.
-        let scratch = folder.projects().join(&name);
-        if name.starts_with("preview-") && scratch.starts_with(folder.projects()) {
-            let _ = std::fs::remove_dir_all(&scratch);
-        }
+        // the job's own projects folder.
+        discard_project(engine, &folder, &built.project);
         let picture = picture?;
         let png = picture["png"]
             .as_str()
@@ -1161,7 +1195,9 @@ struct Material {
 /// Clip rules that make sense, or what is wrong with them.
 fn check_rules(rules: &ClipRules) -> Result<(), Error> {
     if !(rules.min_seconds.is_finite() && rules.min_seconds >= 3.0) {
-        return Err(Error::Invalid("the shortest clip is at least 3 seconds".to_owned()));
+        return Err(Error::Invalid(
+            "the shortest clip is at least 3 seconds".to_owned(),
+        ));
     }
     if !(rules.max_seconds.is_finite() && rules.max_seconds <= LONGEST_CLIP) {
         return Err(Error::Invalid(format!(
@@ -1204,6 +1240,23 @@ fn free_name(location: &Path, name: &str) -> String {
         .map(|revision| format!("{name}-{revision}"))
         .find(|candidate| !location.join(candidate).exists())
         .unwrap_or_else(|| name.to_owned())
+}
+
+/// Closes and removes a project this tool built, when it is where this
+/// tool builds them: directly inside the job's projects folder. Anything
+/// else is left alone.
+fn discard_project(engine: &mut dyn Engine, folder: &Folder, project: &str) {
+    let path = Path::new(project);
+    if path.parent() != Some(folder.projects().as_path()) || !path.is_dir() {
+        return;
+    }
+    let _ = compose::call(
+        engine,
+        json!({ "method": "project.close", "path": project, "save": false }),
+    );
+    if let Err(error) = std::fs::remove_dir_all(path) {
+        log::warn!("shorts: could not remove {}: {error}", path.display());
+    }
 }
 
 /// Where a clip's file in a format is written: `clips/03-its-title-vertical.mp4`.
@@ -1314,32 +1367,41 @@ impl Worker {
         // The recording, as a file here.
         let media = match source::read(&source)? {
             Source::File(path) => path,
-            Source::Link(link) => match known_media.map(PathBuf::from).filter(|path| path.is_file()) {
-                Some(path) => path,
-                None => {
-                    self.stage(Stage::Fetching, "fetching the recording");
-                    source::fetch(
-                        &link,
-                        &self.folder.0,
-                        &self.settings.download,
-                        &self.preparing.cancel,
-                        &mut |fraction, note| self.progress(fraction, note),
-                    )?
+            Source::Link(link) => {
+                match known_media.map(PathBuf::from).filter(|path| path.is_file()) {
+                    Some(path) => path,
+                    None => {
+                        self.stage(Stage::Fetching, "fetching the recording");
+                        source::fetch(
+                            &link,
+                            &self.folder.0,
+                            &self.settings.download,
+                            &self.preparing.cancel,
+                            &mut |fraction, note| self.progress(fraction, note),
+                        )?
+                    }
                 }
-            },
+            }
         };
         self.stop_if_cancelled()?;
 
         // What it is.
-        let info = concat_media::probe(&media)
-            .map_err(|error| Error::Failed(format!("{} does not read as a video: {error}", media.display())))?;
+        let info = concat_media::probe(&media).map_err(|error| {
+            Error::Failed(format!(
+                "{} does not read as a video: {error}",
+                media.display()
+            ))
+        })?;
         let Some(video) = &info.video else {
             return Err(Error::Invalid(format!(
                 "{} has sound but no picture; a short needs a video",
                 media.display()
             )));
         };
-        let duration = info.duration.map(|duration| duration.as_f64()).unwrap_or(0.0);
+        let duration = info
+            .duration
+            .map(|duration| duration.as_f64())
+            .unwrap_or(0.0);
         if duration < SHORTEST_CLIP {
             return Err(Error::Invalid(format!(
                 "{} is {duration:.1} s long; there is nothing to cut",
@@ -1352,7 +1414,11 @@ impl Worker {
             height: video.height,
             fps: {
                 let fps = video.frame_rate.fps().as_f64();
-                if fps.is_finite() && fps > 0.0 { fps } else { 30.0 }
+                if fps.is_finite() && fps > 0.0 {
+                    fps
+                } else {
+                    30.0
+                }
             },
         };
         self.update(true, |job| {
@@ -1363,8 +1429,9 @@ impl Worker {
         // What is said in it. A transcript from a run before is kept when
         // the same model made it.
         let model = self.settings.transcription.model.clone();
-        let kept = Transcript::load(&self.folder.transcript())
-            .filter(|transcript| transcript.model == model && (transcript.duration - duration).abs() < 1.0);
+        let kept = Transcript::load(&self.folder.transcript()).filter(|transcript| {
+            transcript.model == model && (transcript.duration - duration).abs() < 1.0
+        });
         let transcript = match kept {
             Some(transcript) => transcript,
             None if info.audio.is_none() => Transcript {
@@ -1423,9 +1490,14 @@ impl Worker {
             None if info.audio.is_none() => Quiet::default(),
             None => {
                 self.stage(Stage::Listening, "listening for pauses");
-                let levels = sound::levels(&media, duration, &self.preparing.cancel, &mut |fraction, note| {
-                    self.progress(fraction, note);
-                })?;
+                let levels = sound::levels(
+                    &media,
+                    duration,
+                    &self.preparing.cancel,
+                    &mut |fraction, note| {
+                        self.progress(fraction, note);
+                    },
+                )?;
                 let quiet = sound::quiet(&levels);
                 quiet.save(&self.folder.quiet())?;
                 quiet
@@ -1443,7 +1515,8 @@ impl Worker {
             .unwrap_or(false);
         if !planned {
             self.stage(Stage::Suggesting, "picking moments");
-            let moments = moments::suggest(&transcript, &quiet, &self.rules, &self.settings.tighten);
+            let moments =
+                moments::suggest(&transcript, &quiet, &self.rules, &self.settings.tighten);
             self.update(true, |job| {
                 for moment in moments {
                     let id = job.mint_clip();
@@ -1515,7 +1588,11 @@ mod tests {
     fn a_file_is_named_for_its_place_its_title_and_its_shape() {
         let workspace = tempfile::tempdir().expect("a scratch folder");
         let folder = Folder::of(workspace.path(), "talk-1a2b");
-        let mut job = Job::begin("talk-1a2b".to_owned(), "/a.mp4".to_owned(), SourceType::Auto);
+        let mut job = Job::begin(
+            "talk-1a2b".to_owned(),
+            "/a.mp4".to_owned(),
+            SourceType::Auto,
+        );
         for (id, start) in [("c4", 10.0), ("c2", 90.0)] {
             job.clips.push(Clip {
                 id: id.to_owned(),
@@ -1536,7 +1613,9 @@ mod tests {
         let path = output_path(&folder, &job, "c2", "Why most prompts fail!", "vertical");
         assert_eq!(
             path,
-            folder.clips().join("02-why-most-prompts-fail-c2-vertical.mp4")
+            folder
+                .clips()
+                .join("02-why-most-prompts-fail-c2-vertical.mp4")
         );
     }
 }

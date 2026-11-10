@@ -105,8 +105,7 @@ pub fn stem(source: &Source) -> String {
             let mut parts = path.split('/').filter(|part| !part.is_empty());
             let host = parts.next().unwrap_or_default();
             let last = parts
-                .filter(|part| part.len() >= 3 && !["view", "edit", "watch", "share"].contains(part))
-                .next_back()
+                .rfind(|part| part.len() >= 3 && !["view", "edit", "watch", "share"].contains(part))
                 .unwrap_or_default();
             let last = last.rsplit_once('.').map_or(last, |(name, _)| name);
             let host = host.trim_start_matches("www.");
@@ -132,7 +131,11 @@ pub fn slug(text: &str, limit: usize) -> String {
         }
     }
     let out = out.trim_matches('-').to_owned();
-    if out.is_empty() { "clip".to_owned() } else { out }
+    if out.is_empty() {
+        "clip".to_owned()
+    } else {
+        out
+    }
 }
 
 /// The address a share link's file is downloaded from, when the link is
@@ -246,7 +249,9 @@ pub fn fetched(folder: &Path) -> Option<PathBuf> {
                 && path
                     .extension()
                     .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| MEDIA.contains(&extension.to_ascii_lowercase().as_str()))
+                    .is_some_and(|extension| {
+                        MEDIA.contains(&extension.to_ascii_lowercase().as_str())
+                    })
         })
         .collect();
     found.sort();
@@ -263,9 +268,8 @@ pub fn fetch(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(Option<f64>, &str),
 ) -> Result<PathBuf, Error> {
-    std::fs::create_dir_all(folder).map_err(|error| {
-        Error::Failed(format!("could not make {}: {error}", folder.display()))
-    })?;
+    std::fs::create_dir_all(folder)
+        .map_err(|error| Error::Failed(format!("could not make {}: {error}", folder.display())))?;
     if let Some(file) = fetched(folder) {
         return Ok(file);
     }
@@ -326,9 +330,7 @@ fn direct(
 
     let destination = folder.join(format!("source.{extension}"));
     let partial = folder.join(format!("source.{extension}.part"));
-    let fail = |error: std::io::Error| {
-        Error::Failed(format!("the download stopped: {error}"))
-    };
+    let fail = |error: std::io::Error| Error::Failed(format!("the download stopped: {error}"));
     let mut file = std::fs::File::create(&partial).map_err(fail)?;
     let mut reader = response.into_reader();
     let mut buffer = vec![0u8; 256 * 1024];
@@ -482,7 +484,10 @@ fn page(
         match lines.recv_timeout(Duration::from_millis(200)) {
             Ok((from_stderr, line)) => {
                 if let Some(percent) = percent(&line) {
-                    progress(Some(percent / 100.0), &format!("downloading, {percent:.0}%"));
+                    progress(
+                        Some(percent / 100.0),
+                        &format!("downloading, {percent:.0}%"),
+                    );
                 } else if line.contains("[Merger]") {
                     progress(None, "joining picture and sound");
                 } else if from_stderr && !line.trim().is_empty() {
@@ -508,11 +513,75 @@ fn page(
             .or(complaints.last())
             .cloned()
             .unwrap_or_else(|| format!("it ended with {status}"));
-        return Err(Error::Failed(format!("yt-dlp could not fetch the link: {why}")));
+        return Err(Error::Failed(format!(
+            "yt-dlp could not fetch the link: {why}"
+        )));
     }
-    fetched(folder).ok_or_else(|| {
-        Error::Failed("yt-dlp finished without leaving a video file".to_owned())
-    })
+    fetched(folder)
+        .or_else(|| adopt(folder))
+        .ok_or_else(|| Error::Failed("yt-dlp finished without leaving a video file".to_owned()))
+}
+
+/// The container a file's first bytes say it is, as an extension.
+fn sniff(head: &[u8]) -> Option<&'static str> {
+    if head.len() >= 12 && &head[4..8] == b"ftyp" {
+        // The brand says which of the family: QuickTime's is "qt  ".
+        return Some(if &head[8..12] == b"qt  " {
+            "mov"
+        } else {
+            "mp4"
+        });
+    }
+    if head.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        return Some("mkv");
+    }
+    if head.len() >= 12 && head.starts_with(b"RIFF") && &head[8..12] == b"AVI " {
+        return Some("avi");
+    }
+    if head.first() == Some(&0x47) && head.get(188) == Some(&0x47) {
+        return Some("ts");
+    }
+    None
+}
+
+/// A download yt-dlp left under a name that says nothing - a page whose
+/// video it found without learning its type is saved as
+/// `source.unknown_video` - renamed for what its first bytes say it is.
+fn adopt(folder: &Path) -> Option<PathBuf> {
+    const NOT_VIDEO: [&str; 10] = [
+        "part",
+        "ytdl",
+        "json",
+        "jpg",
+        "jpeg",
+        "png",
+        "webp",
+        "vtt",
+        "srt",
+        "description",
+    ];
+    let candidate = std::fs::read_dir(folder)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.is_file()
+                && path.file_stem().is_some_and(|stem| stem == "source")
+                && path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_none_or(|extension| {
+                        !NOT_VIDEO.contains(&extension.to_ascii_lowercase().as_str())
+                    })
+        })?;
+    let mut head = [0u8; 256];
+    let read = std::fs::File::open(&candidate)
+        .and_then(|mut file| file.read(&mut head))
+        .ok()?;
+    let extension = sniff(&head[..read])?;
+    let named = folder.join(format!("source.{extension}"));
+    std::fs::rename(&candidate, &named).ok()?;
+    Some(named)
 }
 
 #[cfg(test)]
@@ -526,7 +595,10 @@ mod tests {
             Source::Link("https://example.com/talk.mp4".to_owned())
         );
         assert!(matches!(read(""), Err(Error::Invalid(_))));
-        assert!(matches!(read("ftp://example.com/a.mp4"), Err(Error::Invalid(_))));
+        assert!(matches!(
+            read("ftp://example.com/a.mp4"),
+            Err(Error::Invalid(_))
+        ));
         assert!(matches!(read("talk.mp4"), Err(Error::Invalid(_))));
         let folder = tempfile::tempdir().expect("a scratch folder");
         let missing = folder.path().join("missing.mp4");
@@ -561,36 +633,93 @@ mod tests {
             Some("https://www.dropbox.com/scl/fi/abc/talk.mp4?rlkey=k1&dl=1")
         );
         assert_eq!(direct_address("https://youtu.be/dQw4w9WgXcQ"), None);
-        assert_eq!(direct_address("https://drive.google.com/file/d/../view"), None);
+        assert_eq!(
+            direct_address("https://drive.google.com/file/d/../view"),
+            None
+        );
     }
 
     #[test]
     fn a_file_is_known_by_its_address_or_its_headers() {
-        assert_eq!(media_extension("https://x.test/a/Talk.MP4?sig=1").as_deref(), Some("mp4"));
+        assert_eq!(
+            media_extension("https://x.test/a/Talk.MP4?sig=1").as_deref(),
+            Some("mp4")
+        );
         assert_eq!(media_extension("https://x.test/watch?v=abc"), None);
         assert_eq!(
-            response_extension(Some("attachment; filename=\"Team call.mov\""), Some("application/octet-stream")).as_deref(),
+            response_extension(
+                Some("attachment; filename=\"Team call.mov\""),
+                Some("application/octet-stream")
+            )
+            .as_deref(),
             Some("mov")
         );
-        assert_eq!(response_extension(None, Some("video/mp4; codecs=avc1")).as_deref(), Some("mp4"));
-        assert_eq!(response_extension(None, Some("application/octet-stream")), None);
+        assert_eq!(
+            response_extension(None, Some("video/mp4; codecs=avc1")).as_deref(),
+            Some("mp4")
+        );
+        assert_eq!(
+            response_extension(None, Some("application/octet-stream")),
+            None
+        );
     }
 
     #[test]
     fn a_job_is_named_after_its_source() {
-        assert_eq!(stem(&Source::File(PathBuf::from("/v/Team Webinar (final).mp4"))), "team-webinar-final");
-        assert_eq!(stem(&Source::Link("https://www.youtube.com/watch?v=abc".to_owned())), "youtube");
-        assert_eq!(stem(&Source::Link("https://cdn.example.com/talks/keynote-2026.mp4".to_owned())), "cdn-keynote-2026");
+        assert_eq!(
+            stem(&Source::File(PathBuf::from("/v/Team Webinar (final).mp4"))),
+            "team-webinar-final"
+        );
+        assert_eq!(
+            stem(&Source::Link(
+                "https://www.youtube.com/watch?v=abc".to_owned()
+            )),
+            "youtube"
+        );
+        assert_eq!(
+            stem(&Source::Link(
+                "https://cdn.example.com/talks/keynote-2026.mp4".to_owned()
+            )),
+            "cdn-keynote-2026"
+        );
         assert_eq!(slug("  ¡¡ ", 10), "clip");
         assert_eq!(slug("A very long title indeed", 10), "a-very-lon");
     }
 
     #[test]
     fn yt_dlp_progress_lines_are_read() {
-        assert_eq!(percent("[download]  42.3% of ~120.00MiB at 3.2MiB/s ETA 00:21"), Some(42.3));
+        assert_eq!(
+            percent("[download]  42.3% of ~120.00MiB at 3.2MiB/s ETA 00:21"),
+            Some(42.3)
+        );
         assert_eq!(percent("[download] 100% of 5.00MiB in 00:01"), Some(100.0));
         assert_eq!(percent("[download] Destination: source.mp4"), None);
         assert_eq!(percent("[youtube] abc: Downloading webpage"), None);
+    }
+
+    #[test]
+    fn a_download_with_no_name_is_named_for_what_it_is() {
+        let folder = tempfile::tempdir().expect("a scratch folder");
+        assert_eq!(adopt(folder.path()), None);
+        // A page's own text is not a video, whatever it is called.
+        std::fs::write(
+            folder.path().join("source.unknown_video"),
+            b"<html>no</html>",
+        )
+        .expect("writes");
+        assert_eq!(adopt(folder.path()), None);
+        let mut mp4 = vec![0, 0, 0, 0x20];
+        mp4.extend_from_slice(b"ftypisom");
+        mp4.extend_from_slice(&[0; 32]);
+        std::fs::write(folder.path().join("source.unknown_video"), &mp4).expect("writes");
+        assert_eq!(adopt(folder.path()), Some(folder.path().join("source.mp4")));
+        assert_eq!(
+            fetched(folder.path()),
+            Some(folder.path().join("source.mp4"))
+        );
+        assert_eq!(sniff(&[0x1A, 0x45, 0xDF, 0xA3, 0, 0]), Some("mkv"));
+        assert_eq!(sniff(b"\0\0\0\x14ftypqt  \0\0"), Some("mov"));
+        assert_eq!(sniff(b"plain text"), None);
     }
 
     #[test]
@@ -601,6 +730,9 @@ mod tests {
         std::fs::write(folder.path().join("source.json"), b"x").expect("writes");
         assert_eq!(fetched(folder.path()), None);
         std::fs::write(folder.path().join("source.mp4"), b"x").expect("writes");
-        assert_eq!(fetched(folder.path()), Some(folder.path().join("source.mp4")));
+        assert_eq!(
+            fetched(folder.path()),
+            Some(folder.path().join("source.mp4"))
+        );
     }
 }

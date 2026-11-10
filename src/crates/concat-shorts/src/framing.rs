@@ -273,7 +273,9 @@ pub fn look(media: &Path, start: f64, end: f64, cancel: &AtomicBool) -> Result<L
         glances.push(glance(&mask));
     }
     if glances.is_empty() {
-        return Err(Error::Failed("the clip has no picture to look at".to_owned()));
+        return Err(Error::Failed(
+            "the clip has no picture to look at".to_owned(),
+        ));
     }
     Ok(conclude(&glances))
 }
@@ -313,7 +315,11 @@ pub fn place(
             // A wide picture cropped tall keeps a person whole from head
             // to waist; a tall one cropped wide keeps a band across their
             // face, so it has to keep much more to be worth it.
-            let least = if ratio > 1.0 { LEAST_KEPT } else { LEAST_KEPT_TALL };
+            let least = if ratio > 1.0 {
+                LEAST_KEPT
+            } else {
+                LEAST_KEPT_TALL
+            };
             look.is_some_and(|look| look.subject == Subject::Person) && kept >= least
         }
     };
@@ -413,24 +419,36 @@ mod tests {
     fn a_person_in_a_wide_picture_is_cropped_to_where_they_are() {
         let wide = (1920, 1080);
         let tall = (1080, 1920);
-        let Placement::Fill { offset_x, offset_y } =
-            place(wide, tall, Choice::Auto, ReframeMode::Auto, Some(&person(0.5, 0.3)))
-        else {
+        let Placement::Fill { offset_x, offset_y } = place(
+            wide,
+            tall,
+            Choice::Auto,
+            ReframeMode::Auto,
+            Some(&person(0.5, 0.3)),
+        ) else {
             panic!("a person is cropped in on");
         };
         assert_eq!((offset_x, offset_y), (0.0, 0.0));
         // Right of centre: the picture moves left, and no further than
         // keeps the frame covered.
-        let Placement::Fill { offset_x, .. } =
-            place(wide, tall, Choice::Auto, ReframeMode::Auto, Some(&person(0.7, 0.3)))
-        else {
+        let Placement::Fill { offset_x, .. } = place(
+            wide,
+            tall,
+            Choice::Auto,
+            ReframeMode::Auto,
+            Some(&person(0.7, 0.3)),
+        ) else {
             panic!("a person is cropped in on");
         };
         let ratio = (16.0 / 9.0) / (9.0 / 16.0);
         assert!((offset_x + 0.2 * ratio).abs() < 1e-9, "{offset_x}");
-        let Placement::Fill { offset_x, .. } =
-            place(wide, tall, Choice::Auto, ReframeMode::Auto, Some(&person(0.99, 0.3)))
-        else {
+        let Placement::Fill { offset_x, .. } = place(
+            wide,
+            tall,
+            Choice::Auto,
+            ReframeMode::Auto,
+            Some(&person(0.99, 0.3)),
+        ) else {
             panic!("a person is cropped in on");
         };
         assert!((offset_x + (ratio - 1.0) / 2.0).abs() < 1e-9, "{offset_x}");
@@ -449,7 +467,10 @@ mod tests {
             ..person(0.5, 0.5)
         };
         for look in [Some(&screen), Some(&group), None] {
-            assert_eq!(place(wide, tall, Choice::Auto, ReframeMode::Auto, look), Placement::Fit);
+            assert_eq!(
+                place(wide, tall, Choice::Auto, ReframeMode::Auto, look),
+                Placement::Fit
+            );
             assert!(matches!(
                 place(wide, tall, Choice::Crop, ReframeMode::Auto, look),
                 Placement::Fill { .. }
@@ -460,7 +481,13 @@ mod tests {
             ));
         }
         assert_eq!(
-            place(wide, tall, Choice::Fit, ReframeMode::Crop, Some(&person(0.5, 0.3))),
+            place(
+                wide,
+                tall,
+                Choice::Fit,
+                ReframeMode::Crop,
+                Some(&person(0.5, 0.3))
+            ),
             Placement::Fit
         );
     }
@@ -468,8 +495,17 @@ mod tests {
     #[test]
     fn the_same_shape_just_fills_and_a_tall_picture_keeps_the_head() {
         assert_eq!(
-            place((3840, 2160), (1920, 1080), Choice::Auto, ReframeMode::Auto, None),
-            Placement::Fill { offset_x: 0.0, offset_y: 0.0 }
+            place(
+                (3840, 2160),
+                (1920, 1080),
+                Choice::Auto,
+                ReframeMode::Auto,
+                None
+            ),
+            Placement::Fill {
+                offset_x: 0.0,
+                offset_y: 0.0
+            }
         );
         // A phone video into a square: the head, high in the picture,
         // stays in view.
@@ -489,7 +525,13 @@ mod tests {
         assert!(offset_y <= reach + 1e-9);
         // A phone video into a wide frame keeps too little to crop.
         assert_eq!(
-            place((1080, 1920), (1920, 1080), Choice::Auto, ReframeMode::Auto, Some(&person(0.5, 0.25))),
+            place(
+                (1080, 1920),
+                (1920, 1080),
+                Choice::Auto,
+                ReframeMode::Auto,
+                Some(&person(0.5, 0.25))
+            ),
             Placement::Fit
         );
     }

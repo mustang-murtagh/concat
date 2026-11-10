@@ -79,7 +79,7 @@ pub struct Brand {
 }
 
 /// One typeface of the brand.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct BrandFont {
     /// The family name titles ask for, e.g. "Montserrat".
@@ -373,15 +373,6 @@ impl Default for Brand {
     }
 }
 
-impl Default for BrandFont {
-    fn default() -> Self {
-        BrandFont {
-            family: String::new(),
-            file: String::new(),
-        }
-    }
-}
-
 impl Default for Logo {
     fn default() -> Self {
         Logo {
@@ -576,9 +567,8 @@ pub fn rgb(hex: &str) -> Option<[u8; 3]> {
 /// colours are opaque.
 pub fn blend(over: [u8; 3], under: [u8; 3], strength: f64) -> String {
     let strength = strength.clamp(0.0, 1.0);
-    let mix = |a: u8, b: u8| {
-        (f64::from(a) * strength + f64::from(b) * (1.0 - strength)).round() as u8
-    };
+    let mix =
+        |a: u8, b: u8| (f64::from(a) * strength + f64::from(b) * (1.0 - strength)).round() as u8;
     format!(
         "#{:02x}{:02x}{:02x}",
         mix(over[0], under[0]),
@@ -670,11 +660,17 @@ impl Settings {
 
         for (name, hex) in &self.brand.colors {
             if rgb(hex).is_none() {
-                wrong.push(format!("brand.colors.{name} is {hex:?}, not a #rrggbb colour"));
+                wrong.push(format!(
+                    "brand.colors.{name} is {hex:?}, not a #rrggbb colour"
+                ));
             }
         }
         let colors = [
-            ("brand.endCard.background", &self.brand.end_card.background, false),
+            (
+                "brand.endCard.background",
+                &self.brand.end_card.background,
+                false,
+            ),
             ("brand.endCard.text", &self.brand.end_card.text, false),
             ("captions.text", &self.captions.text, false),
             ("captions.plate", &self.captions.plate, true),
@@ -695,7 +691,9 @@ impl Settings {
         }
         let logo = &self.brand.logo;
         if !(logo.width.is_finite() && logo.width > 0.0 && logo.width <= 1.0) {
-            wrong.push("brand.logo.width is a fraction of the frame's width, above 0 up to 1".to_owned());
+            wrong.push(
+                "brand.logo.width is a fraction of the frame's width, above 0 up to 1".to_owned(),
+            );
         }
         if !(logo.margin.is_finite() && (0.0..=0.4).contains(&logo.margin)) {
             wrong.push("brand.logo.margin is a fraction of the frame's width, 0 to 0.4".to_owned());
@@ -740,7 +738,10 @@ impl Settings {
         if !(tighten.min_pause.is_finite() && (0.2..=10.0).contains(&tighten.min_pause)) {
             wrong.push("tighten.minPause is 0.2 to 10 seconds".to_owned());
         }
-        if !(tighten.keep.is_finite() && tighten.keep >= 0.03 && tighten.keep * 2.0 < tighten.min_pause) {
+        if !(tighten.keep.is_finite()
+            && tighten.keep >= 0.03
+            && tighten.keep * 2.0 < tighten.min_pause)
+        {
             wrong.push(
                 "tighten.keep is at least 0.03 seconds and less than half of tighten.minPause"
                     .to_owned(),
@@ -757,7 +758,9 @@ impl Settings {
             }
         }
         if !(audio.loudness == 0.0 || (-30.0..=-12.0).contains(&audio.loudness)) {
-            wrong.push("audio.loudness is -30 to -12 LUFS, or 0 to leave the level alone".to_owned());
+            wrong.push(
+                "audio.loudness is -30 to -12 LUFS, or 0 to leave the level alone".to_owned(),
+            );
         }
 
         if self.formats.is_empty() {
@@ -780,7 +783,7 @@ impl Settings {
                 wrong.push(format!("two formats are called {id:?}"));
             }
             seen.push(id);
-            let side = |pixels: u32| (128..=4096).contains(&pixels) && pixels % 2 == 0;
+            let side = |pixels: u32| (128..=4096).contains(&pixels) && pixels.is_multiple_of(2);
             if !(side(format.width) && side(format.height)) {
                 wrong.push(format!(
                     "format {id}: width and height are even numbers of pixels, 128 to 4096"
@@ -810,7 +813,14 @@ impl Settings {
             wrong.push("export.crf is 0 to 51".to_owned());
         }
         const PRESETS: [&str; 9] = [
-            "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower",
+            "ultrafast",
+            "superfast",
+            "veryfast",
+            "faster",
+            "fast",
+            "medium",
+            "slow",
+            "slower",
             "veryslow",
         ];
         if !PRESETS.contains(&self.export.preset.as_str()) {
@@ -821,7 +831,10 @@ impl Settings {
         }
         const MODELS: [&str; 6] = ["tiny.en", "tiny", "base.en", "base", "small.en", "small"];
         if !MODELS.contains(&self.transcription.model.as_str()) {
-            wrong.push(format!("transcription.model is one of {}", MODELS.join(", ")));
+            wrong.push(format!(
+                "transcription.model is one of {}",
+                MODELS.join(", ")
+            ));
         }
         if self.download.yt_dlp.trim().is_empty() {
             wrong.push("download.ytDlp names the yt-dlp program".to_owned());
@@ -931,7 +944,9 @@ mod tests {
 
     #[test]
     fn the_defaults_are_valid_and_survive_a_round_trip() {
-        let settings = Settings::default().checked().expect("the defaults are valid");
+        let settings = Settings::default()
+            .checked()
+            .expect("the defaults are valid");
         let text = serde_json::to_string(&settings).expect("encodes");
         let back: Settings = serde_json::from_str(&text).expect("decodes");
         assert_eq!(back, settings);
@@ -990,7 +1005,8 @@ mod tests {
         assert!(matches!(colour, Err(Error::Invalid(why)) if why.contains("captions.plate")));
         let order = settings.patched(&json!({ "clips": { "minSeconds": 120 } }));
         assert!(matches!(order, Err(Error::Invalid(why)) if why.contains("maxSeconds")));
-        let odd = settings.patched(&json!({ "formats": [{ "id": "tall", "width": 1081, "height": 1920 }] }));
+        let odd = settings
+            .patched(&json!({ "formats": [{ "id": "tall", "width": 1081, "height": 1920 }] }));
         assert!(matches!(odd, Err(Error::Invalid(why)) if why.contains("even")));
     }
 
@@ -998,7 +1014,10 @@ mod tests {
     fn settings_are_read_back_from_their_file() {
         let folder = tempfile::tempdir().expect("a scratch folder");
         let dirs = AppDirs::under(folder.path());
-        assert_eq!(Settings::load(&dirs).expect("defaults"), Settings::default());
+        assert_eq!(
+            Settings::load(&dirs).expect("defaults"),
+            Settings::default()
+        );
         let mut settings = Settings::default();
         settings.brand.logo.file = "/logos/mark.png".to_owned();
         settings.save(&dirs).expect("saves");
@@ -1009,9 +1028,14 @@ mod tests {
 
     #[test]
     fn the_workspace_is_the_named_folder_or_one_in_the_videos_folder() {
-        let mut settings = Settings::default();
-        settings.workspace = "/data/shorts".to_owned();
-        assert_eq!(settings.workspace_dir().expect("a path"), PathBuf::from("/data/shorts"));
+        let mut settings = Settings {
+            workspace: "/data/shorts".to_owned(),
+            ..Settings::default()
+        };
+        assert_eq!(
+            settings.workspace_dir().expect("a path"),
+            PathBuf::from("/data/shorts")
+        );
         settings.workspace = "shorts".to_owned();
         assert!(matches!(settings.workspace_dir(), Err(Error::Invalid(_))));
     }

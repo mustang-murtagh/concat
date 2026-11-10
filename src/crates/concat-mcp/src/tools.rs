@@ -1131,7 +1131,10 @@ mod tests {
                 "shorts_start",
                 json!({ "source": "/tmp/talk.mp4", "sourceType": "talkingHead", "maxClips": 4 }),
             ),
-            ("shorts_wait", json!({ "job": "talk-1a2b", "timeoutSeconds": 5 })),
+            (
+                "shorts_wait",
+                json!({ "job": "talk-1a2b", "timeoutSeconds": 5 }),
+            ),
             ("shorts_status", json!({})),
             (
                 "shorts_transcript",
