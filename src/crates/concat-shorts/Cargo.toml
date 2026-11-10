@@ -1,0 +1,28 @@
+[package]
+name = "concat-shorts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Long recordings into short clips: transcribe, pick the moments, tighten, reframe for every shape of screen, caption and brand, through the Concat API's own edit commands."
+
+[dependencies]
+concat-api.workspace = true
+concat-core.workspace = true
+concat-host.workspace = true
+concat-media.workspace = true
+concat-speech.workspace = true
+# The person model that finds the speaker a tall or square frame is
+# cropped in on; concat-host already builds it for cutouts.
+concat-vision = { workspace = true, features = ["infer"] }
+serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
+# Reading the body of a download concat-host's network layer opened.
+ureq = "2"
+log = { version = "0.4", features = ["std"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

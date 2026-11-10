@@ -79,6 +79,8 @@ pub enum Action {
     Mask,
     /// `preview.frame`, as an image.
     PreviewFrame,
+    /// A shorts tool: a job of `concat-shorts`, not one request.
+    Shorts(crate::shorts::Kind),
 }
 
 /// How a reply is shown to the agent.
@@ -165,7 +167,7 @@ impl Tool {
 /// Every tool, in the order `tools/list` gives them.
 pub fn catalogue() -> Vec<Tool> {
     use Reply::{Raw, Summary};
-    vec![
+    let mut tools = vec![
         Tool {
             name: "concat_version",
             title: "Concat version",
@@ -488,7 +490,9 @@ pub fn catalogue() -> Vec<Tool> {
             idempotent: true,
             action: Action::PreviewFrame,
         },
-    ]
+    ];
+    tools.extend(crate::shorts::catalogue());
+    tools
 }
 
 /// What a tool call came to: MCP content, and whether it is an error the
@@ -503,7 +507,7 @@ pub struct Outcome {
 }
 
 impl Outcome {
-    fn json(value: Value) -> Outcome {
+    pub(crate) fn json(value: Value) -> Outcome {
         let text = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
         Outcome {
             content: vec![json!({ "type": "text", "text": text })],
@@ -542,6 +546,8 @@ pub struct Context<'a> {
 pub struct Toolbox {
     tools: Vec<(Tool, Value)>,
     schemas: Schemas,
+    /// The jobs behind the shorts tools.
+    shorts: crate::shorts::Shorts,
 }
 
 impl Toolbox {
@@ -558,7 +564,11 @@ impl Toolbox {
                 (tool, schema)
             })
             .collect();
-        Toolbox { tools, schemas }
+        Toolbox {
+            tools,
+            schemas,
+            shorts: crate::shorts::Shorts::new(),
+        }
     }
 
     /// `tools/list`'s list.
@@ -600,7 +610,7 @@ impl Toolbox {
             Value::Null => Value::Object(Map::new()),
             other => other,
         };
-        Some(match run(tool, arguments, context) {
+        Some(match run(tool, arguments, context, &self.shorts) {
             Ok(outcome) => outcome,
             Err(error) => Outcome::error(&error),
         })
@@ -632,6 +642,7 @@ fn input_schema(schemas: &Schemas, tool: &Tool) -> Option<Value> {
             Some(schema)
         }
         Action::PreviewFrame => schemas.method("preview.frame"),
+        Action::Shorts(kind) => Some(crate::shorts::schema(kind)),
         Action::Mask => {
             let update = schemas.command("updateClip")?;
             let mut mask = schemas.def("ClipMask")?;
@@ -712,9 +723,21 @@ fn edit(op: &str, mut arguments: Value) -> Result<Request, ApiError> {
     request("edit.apply", json!({ "path": path, "command": arguments }))
 }
 
-fn run(tool: &Tool, arguments: Value, context: Context<'_>) -> Result<Outcome, ApiError> {
+fn run(
+    tool: &Tool,
+    arguments: Value,
+    context: Context<'_>,
+    shorts: &crate::shorts::Shorts,
+) -> Result<Outcome, ApiError> {
     let backend = context.backend;
     match tool.action {
+        Action::Shorts(kind) => shorts.run(
+            kind,
+            arguments,
+            backend,
+            context.cancelled,
+            context.progress,
+        ),
         Action::Method { method, reply } => {
             let result = backend.call(request(method, arguments)?)?;
             Ok(Outcome::json(match reply {
@@ -1104,6 +1127,42 @@ mod tests {
                 "preview_frame",
                 json!({ "path": "/tmp/Cut", "time": 1.5, "width": 320, "height": 180 }),
             ),
+            (
+                "shorts_start",
+                json!({ "source": "/tmp/talk.mp4", "sourceType": "talkingHead", "maxClips": 4 }),
+            ),
+            ("shorts_wait", json!({ "job": "talk-1a2b", "timeoutSeconds": 5 })),
+            ("shorts_status", json!({})),
+            (
+                "shorts_transcript",
+                json!({ "job": "talk-1a2b", "from": "1:30", "to": 300, "maxChars": 4000 }),
+            ),
+            (
+                "shorts_clips",
+                json!({ "job": "talk-1a2b", "clips": [{ "start": "1:05", "end": 130.5, "title": "Start with why", "framing": "crop", "focusX": 0.4 }, { "id": "c2", "focusX": null, "approved": false }], "replace": false }),
+            ),
+            (
+                "shorts_suggest",
+                json!({ "job": "talk-1a2b", "count": 3, "minSeconds": 30, "maxSeconds": 45 }),
+            ),
+            (
+                "shorts_review",
+                json!({ "job": "talk-1a2b", "approve": "all", "reject": ["c3"], "remove": [] }),
+            ),
+            (
+                "shorts_preview",
+                json!({ "job": "talk-1a2b", "clip": "c1", "format": "vertical", "time": 4.5 }),
+            ),
+            (
+                "shorts_render",
+                json!({ "job": "talk-1a2b", "clips": ["c1"], "formats": ["vertical", "square"], "again": true, "timeoutSeconds": 30 }),
+            ),
+            ("shorts_cancel", json!({ "job": "talk-1a2b" })),
+            ("shorts_settings", json!({})),
+            (
+                "shorts_settings_update",
+                json!({ "patch": { "brand": { "logo": { "file": "/tmp/logo.png" } } } }),
+            ),
         ]
     }
 
@@ -1159,6 +1218,9 @@ mod tests {
                 }
                 Action::PreviewFrame => request("preview.frame", sample.clone()),
                 Action::Mask => mask(sample.clone()),
+                // A shorts tool is a job, not one request: its sample
+                // fitting its schema is the whole of this check.
+                Action::Shorts(_) => continue,
             };
             let built = built.unwrap_or_else(|error| panic!("{name}: {error}"));
             // Back again: the request as the API writes it fits the API's

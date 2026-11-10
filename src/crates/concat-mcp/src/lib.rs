@@ -16,10 +16,16 @@
 //! ([`summary`]), and where requests go ([`backend`]): the window's own
 //! server when the Automation page has it on, or an API in this process
 //! when it does not.
+//!
+//! One family of tools is more than a request: the shorts tools
+//! ([`shorts`]), which turn a long recording into short clips. They are a
+//! job with a plan, kept by `concat-shorts`; what they change in a
+//! project they change through the same backend, as requests.
 
 pub mod backend;
 pub mod protocol;
 pub mod schema;
+pub mod shorts;
 pub mod summary;
 pub mod tools;
 
