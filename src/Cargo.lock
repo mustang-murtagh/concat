@@ -1303,6 +1303,7 @@ version = "0.2.10"
 dependencies = [
  "concat-api",
  "concat-server",
+ "concat-shorts",
  "serde_json",
  "tempfile",
 ]
@@ -1382,6 +1383,23 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+]
+
+[[package]]
+name = "concat-shorts"
+version = "0.2.10"
+dependencies = [
+ "concat-api",
+ "concat-core",
+ "concat-host",
+ "concat-media",
+ "concat-speech",
+ "concat-vision",
+ "log",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ureq 2.12.1",
 ]
 
 [[package]]

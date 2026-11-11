@@ -571,6 +571,37 @@ pub struct Segment {
     pub text: String,
 }
 
+/// One word of a line, in seconds relative to the transcribed window's
+/// start: when whisper heard it begin and end. Whisper times its tokens
+/// from the attention it paid each one, which is good to a tenth of a
+/// second or so in clear speech - enough to light a caption's words as
+/// they are said, and to cut between two of them.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Word {
+    /// Seconds from the window's start.
+    pub start: f64,
+    /// Seconds from the window's start.
+    pub end: f64,
+    /// The word as whisper wrote it, punctuation attached.
+    pub text: String,
+}
+
+/// A caption with its words timed one by one; see
+/// [`Transcriber::transcribe_words`].
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TimedSegment {
+    /// Seconds from the window's start.
+    pub start: f64,
+    /// Seconds from the window's start.
+    pub end: f64,
+    /// What was said.
+    pub text: String,
+    /// The line's words in order, each inside the line's span.
+    pub words: Vec<Word>,
+}
+
 /// What to transcribe.
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -796,13 +827,48 @@ impl Transcriber {
         self.run(dirs, request, Recipe::SHIPPED, progress)
     }
 
+    /// [`Transcriber::transcribe`] with every line's words timed as well:
+    /// the same run, the same lines, and for each the moment every word
+    /// of it starts and ends. For captions that follow the speaker word
+    /// by word, and for cutting a recording between two words.
+    pub fn transcribe_words(
+        &self,
+        dirs: &AppDirs,
+        request: &TranscribeRequest,
+        progress: impl FnMut(JobStage) + Send + 'static,
+    ) -> Result<Vec<TimedSegment>, String> {
+        self.run_timed(dirs, request, Recipe::SHIPPED, true, progress)
+    }
+
     fn run(
         &self,
         dirs: &AppDirs,
         request: &TranscribeRequest,
         recipe: Recipe,
-        mut progress: impl FnMut(JobStage) + Send + 'static,
+        progress: impl FnMut(JobStage) + Send + 'static,
     ) -> Result<Vec<Segment>, String> {
+        let lines = self.run_timed(dirs, request, recipe, false, progress)?;
+        Ok(lines
+            .into_iter()
+            .map(|line| Segment {
+                start: line.start,
+                end: line.end,
+                text: line.text,
+            })
+            .collect())
+    }
+
+    /// One run. With `words`, whisper times its tokens too and each line
+    /// comes back with its words; without, the lines' `words` are empty
+    /// and the run is the one it always was.
+    fn run_timed(
+        &self,
+        dirs: &AppDirs,
+        request: &TranscribeRequest,
+        recipe: Recipe,
+        words: bool,
+        mut progress: impl FnMut(JobStage) + Send + 'static,
+    ) -> Result<Vec<TimedSegment>, String> {
         let job = self.gate.begin("transcription")?;
         let cancel = job.cancel_handle();
 
@@ -957,6 +1023,9 @@ impl Transcriber {
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
         params.set_suppress_blank(true);
+        // Token times cost a pass over the attention whisper has already
+        // computed, and change nothing it writes.
+        params.set_token_timestamps(words);
         // Non-speech tokens are left to whisper: "[Music]", "(tepuk
         // tangan)" and "♪" are how it says what it hears is not words,
         // and `keep_segment` drops those lines. Suppressed
@@ -1029,11 +1098,27 @@ impl Transcriber {
             if recipe.prune {
                 text = unloop(&text);
             }
-            keep_segment(start, end, text)
+            let line = keep_segment(start, end, text)?;
+            let heard = if words {
+                token_words(&segment, eot, |at| reel.to_source(at))
+            } else {
+                Vec::new()
+            };
+            let words = if words {
+                settle_words(&line.text, heard, line.start, line.end)
+            } else {
+                Vec::new()
+            };
+            Some(TimedSegment {
+                start: line.start,
+                end: line.end,
+                text: line.text,
+                words,
+            })
         });
-        let lines: Vec<Segment> = lines.collect();
+        let lines: Vec<TimedSegment> = lines.collect();
         Ok(if recipe.prune {
-            drop_repeats(lines)
+            drop_repeats_by(lines, |line| &line.text)
         } else {
             lines
         })
@@ -1047,6 +1132,119 @@ impl Transcriber {
     pub fn is_busy(&self) -> bool {
         self.gate.is_busy()
     }
+}
+
+/// A line's words as whisper timed them: its text tokens gathered into
+/// words - a token that opens with a space opens a word - each from its
+/// first token's start to its last token's end, mapped by `to_source` from
+/// seconds of what whisper heard to seconds of the window. Bytes, not
+/// strings, are gathered: one character can be split across two tokens.
+fn token_words(
+    segment: &WhisperSegment,
+    eot: whisper_rs::WhisperTokenId,
+    to_source: impl Fn(f64) -> f64,
+) -> Vec<Word> {
+    let mut words: Vec<(Vec<u8>, i64, i64)> = Vec::new();
+    for index in 0..segment.n_tokens() {
+        let Some(token) = segment.get_token(index) else {
+            continue;
+        };
+        let data = token.token_data();
+        // Timestamps and the other special tokens sit past end-of-text.
+        if data.id >= eot {
+            continue;
+        }
+        let Ok(bytes) = token.to_bytes() else {
+            continue;
+        };
+        if bytes.is_empty() {
+            continue;
+        }
+        match words.last_mut() {
+            Some((text, _, end)) if bytes[0] != b' ' => {
+                text.extend_from_slice(bytes);
+                *end = (*end).max(data.t1);
+            }
+            _ => words.push((bytes.to_vec(), data.t0, data.t1)),
+        }
+    }
+    words
+        .into_iter()
+        .filter_map(|(bytes, t0, t1)| {
+            let text = String::from_utf8_lossy(&bytes).trim().to_owned();
+            (!text.is_empty()).then(|| Word {
+                start: to_source(t0 as f64 / 100.0),
+                end: to_source(t1 as f64 / 100.0),
+                text,
+            })
+        })
+        .collect()
+}
+
+/// The words of `text` between `start` and `end`, timed: as whisper heard
+/// them when its words are the line's words and their times make sense,
+/// and spread over the line by their length otherwise - a line a loop was
+/// taken out of no longer has the words whisper timed, and a token whisper
+/// could not place comes back at zero. Either way the words are in order,
+/// inside the line, and none ends before it starts.
+fn settle_words(text: &str, heard: Vec<Word>, start: f64, end: f64) -> Vec<Word> {
+    let wanted: Vec<&str> = text.split_whitespace().collect();
+    if wanted.is_empty() || end <= start {
+        return Vec::new();
+    }
+    let same = heard.len() == wanted.len()
+        && heard
+            .iter()
+            .zip(&wanted)
+            .all(|(word, wanted)| word.text == **wanted);
+    let sane = same
+        && heard
+            .iter()
+            .all(|word| word.start.is_finite() && word.end.is_finite() && word.end >= word.start)
+        && heard.windows(2).all(|pair| pair[1].start >= pair[0].start)
+        && heard.last().is_some_and(|last| last.end > heard[0].start);
+    if !sane {
+        return spread_words(&wanted, start, end);
+    }
+    let mut words = heard;
+    let mut floor = start;
+    for word in &mut words {
+        word.start = word.start.clamp(floor, end);
+        word.end = word.end.clamp(word.start, end);
+        floor = word.start;
+    }
+    // A word whisper gave no length runs to the next one's start, or a
+    // little way on for the last.
+    for index in 0..words.len() {
+        if words[index].end - words[index].start < 0.02 {
+            let next = words
+                .get(index + 1)
+                .map_or(end, |next| next.start.max(words[index].start));
+            words[index].end = next.min(words[index].start + 0.6).max(words[index].start);
+        }
+    }
+    words
+}
+
+/// `wanted` spread over `start..end`, each word a share of the time as
+/// long as its letters are of the line's: the timing a reader would guess.
+fn spread_words(wanted: &[&str], start: f64, end: f64) -> Vec<Word> {
+    let weight = |word: &str| word.chars().count().max(1) as f64 + 1.0;
+    let total: f64 = wanted.iter().map(|word| weight(word)).sum();
+    let mut at = start;
+    wanted
+        .iter()
+        .map(|word| {
+            let length = (end - start) * weight(word) / total;
+            let timed = Word {
+                start: at,
+                end: at + length,
+                text: (*word).to_owned(),
+            };
+            at += length;
+            timed
+        })
+        .collect()
 }
 
 /// Whisper marks silence and music with bracketed stage directions
@@ -1234,19 +1432,25 @@ fn unloop(text: &str) -> String {
 /// The lines without a loop that runs from one line to the next: the
 /// same words three lines running or more are kept once, the first time,
 /// at its own time. Twice in a row is left alone - "Yes." "Yes." is said.
+#[cfg(test)]
 fn drop_repeats(lines: Vec<Segment>) -> Vec<Segment> {
+    drop_repeats_by(lines, |line| &line.text)
+}
+
+/// [`drop_repeats`] over anything with a line of text in it.
+fn drop_repeats_by<T>(lines: Vec<T>, text: impl Fn(&T) -> &str) -> Vec<T> {
     let plain = |text: &str| -> String {
         text.chars()
             .filter(|c| c.is_alphanumeric())
             .flat_map(char::to_lowercase)
             .collect()
     };
-    let mut out: Vec<Segment> = Vec::with_capacity(lines.len());
+    let mut out: Vec<T> = Vec::with_capacity(lines.len());
     let mut run = 0;
     for line in lines {
         let same = out
             .last()
-            .is_some_and(|last| plain(&last.text) == plain(&line.text));
+            .is_some_and(|last| plain(text(last)) == plain(text(&line)));
         run = if same { run + 1 } else { 1 };
         if run < 3 {
             out.push(line);
@@ -1261,6 +1465,55 @@ fn drop_repeats(lines: Vec<Segment>) -> Vec<Segment> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn word(start: f64, end: f64, text: &str) -> Word {
+        Word {
+            start,
+            end,
+            text: text.to_owned(),
+        }
+    }
+
+    #[test]
+    fn words_whisper_timed_are_kept_inside_their_line() {
+        let heard = vec![
+            word(0.9, 1.4, "Start"),
+            word(1.4, 1.4, "with"),
+            word(1.9, 2.6, "why."),
+        ];
+        let words = settle_words("Start with why.", heard, 1.0, 2.5);
+        assert_eq!(words.len(), 3);
+        // Drawn in to the line, in order, and the word with no length
+        // runs to the next one's start.
+        assert_eq!(words[0].start, 1.0);
+        assert_eq!(words[1], word(1.4, 1.9, "with"));
+        assert_eq!(words[2].end, 2.5);
+        assert!(words.windows(2).all(|pair| pair[0].start <= pair[1].start));
+    }
+
+    #[test]
+    fn words_that_do_not_match_the_line_are_spread_by_length() {
+        // The line had a loop taken out of it, so whisper's words are not
+        // the line's any more.
+        let heard = vec![word(0.0, 0.2, "no"), word(0.2, 0.4, "no")];
+        let words = settle_words("no really", heard, 2.0, 4.0);
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[0].text, "no");
+        assert_eq!(words[1].text, "really");
+        assert_eq!(words[0].start, 2.0);
+        assert!((words[1].end - 4.0).abs() < 1e-9);
+        // The longer word has the longer share.
+        assert!(words[1].end - words[1].start > words[0].end - words[0].start);
+    }
+
+    #[test]
+    fn words_whisper_could_not_place_are_spread() {
+        let heard = vec![word(0.0, 0.0, "one"), word(0.0, 0.0, "two")];
+        let words = settle_words("one two", heard, 3.0, 4.0);
+        assert_eq!(words[0].start, 3.0);
+        assert!(words[1].start > 3.0);
+        assert!(settle_words("", Vec::new(), 0.0, 1.0).is_empty());
+    }
 
     /// Prints the captions a downloaded model makes of a file, for timing
     /// them by hand against the speech: `CONCAT_CAPTION_FILE=talk.wav

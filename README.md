@@ -44,6 +44,12 @@
 </div>
 
 
+## In this fork: Concat Shorts
+
+Turn one long recording into finished short clips by asking Claude: *"make shorts from this recording"*. It transcribes on your machine, suggests the best moments for you to approve, then renders each in vertical, landscape and square with pauses cut, the speaker framed, word-by-word captions, your brand and cleaned-up sound.
+
+**[Set it up and use it: docs/SHORTS.md](docs/SHORTS.md)**
+
 ## About
 
 Concat is a free, open-source video editor for macOS, Windows, Linux and Android. It covers what most edits need: auto-captions, text-to-speech, background removal, keyframe animation, effects and titles, multi-track cutting, 4K export. With none of the catches: no watermark, no account, no subscription, no upload.

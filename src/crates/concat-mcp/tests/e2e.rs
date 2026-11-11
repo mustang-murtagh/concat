@@ -334,6 +334,194 @@ fn an_agent_edits_previews_and_exports_a_project_headless() {
     agent.end();
 }
 
+/// A recording becomes a short: started, planned by its times, looked at
+/// and rendered, with the settings changed on the way. The recording has
+/// no sound, so nothing is transcribed and no speech model is fetched -
+/// the plan is the clip the agent gives - and everything after the plan is
+/// what any job goes through.
+#[test]
+fn an_agent_makes_a_short_from_a_recording() {
+    let scratch = tempfile::tempdir().expect("scratch");
+    let home = scratch.path();
+    let recording = home.join("recording.mp4");
+    std::fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../concat-media/fixtures/vlc-first-picture-not-a-keyframe.mp4"
+        ),
+        &recording,
+    )
+    .expect("the fixture copies");
+    let mut agent = Agent::spawn(home, "headless", &[]);
+    agent.ask(
+        "initialize",
+        json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "e2e", "version": "0" },
+        }),
+    );
+
+    // The settings: the defaults at first, then one small frame shape and
+    // a quick encode, so the render is seconds.
+    let settings = agent.tool("shorts_settings", json!({}));
+    let settings = &settings["structuredContent"];
+    assert_eq!(
+        settings["settings"]["formats"].as_array().map(Vec::len),
+        Some(3)
+    );
+    assert!(
+        settings["file"]
+            .as_str()
+            .is_some_and(|file| file.ends_with("shorts.json")),
+        "{settings}"
+    );
+    let workspace = home.join("shorts");
+    let changed = agent.tool(
+        "shorts_settings_update",
+        json!({ "patch": {
+            "workspace": workspace.to_string_lossy(),
+            "export": { "preset": "ultrafast" },
+            "formats": [{ "id": "tall", "label": "Tall", "width": 180, "height": 320 }],
+        } }),
+    );
+    assert_eq!(
+        changed["structuredContent"]["settings"]["formats"][0]["id"],
+        "tall"
+    );
+    // A setting nobody knows is refused by name, and nothing changes.
+    let (_, refused) = agent.ask(
+        "tools/call",
+        json!({ "name": "shorts_settings_update", "arguments": { "patch": { "clips": { "maxClip": 2 } } } }),
+    );
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    assert!(
+        refused["result"]["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("maxClip")),
+        "{refused}"
+    );
+
+    // A source that is not there is refused before a job is made.
+    let (_, missing) = agent.ask(
+        "tools/call",
+        json!({ "name": "shorts_start", "arguments": { "source": home.join("missing.mp4").to_string_lossy() } }),
+    );
+    assert_eq!(missing["result"]["isError"], true, "{missing}");
+
+    let started = agent.tool(
+        "shorts_start",
+        json!({ "source": recording.to_string_lossy(), "sourceType": "screen" }),
+    );
+    let job = started["structuredContent"]["job"]
+        .as_str()
+        .expect("a job id")
+        .to_owned();
+    assert!(job.starts_with("recording-"), "{job}");
+    let waited = agent.tool("shorts_wait", json!({ "job": job, "timeoutSeconds": 120 }));
+    let prepared = &waited["structuredContent"];
+    assert_eq!(prepared["stage"], "ready", "{prepared}");
+    assert_eq!(prepared["words"], 0);
+    assert_eq!(prepared["recording"]["width"], 64);
+    assert_eq!(prepared["clips"], json!([]));
+    assert!(workspace.join(&job).join("job.json").is_file());
+
+    // Nothing is approved, so nothing renders.
+    let (_, early) = agent.ask(
+        "tools/call",
+        json!({ "name": "shorts_render", "arguments": { "job": job } }),
+    );
+    assert_eq!(early["result"]["isError"], true, "{early}");
+
+    // A clip past the end of the recording is refused; one inside it is
+    // planned, approved.
+    let (_, late) = agent.ask(
+        "tools/call",
+        json!({ "name": "shorts_clips", "arguments": { "job": job, "clips": [{ "start": "0:10", "end": "0:20" }] } }),
+    );
+    assert_eq!(late["result"]["isError"], true, "{late}");
+    let planned = agent.tool(
+        "shorts_clips",
+        json!({ "job": job, "clips": [{ "start": 0.5, "end": "0:02.5", "title": "The middle" }] }),
+    );
+    let clip = &planned["structuredContent"]["clips"][0];
+    assert_eq!(clip["id"], "c1");
+    assert_eq!(clip["verdict"], "approved");
+    assert_eq!(clip["title"], "The middle");
+    assert_eq!(clip["seconds"], 2.0);
+
+    // One frame of it, as it will render: the picture whole in the tall
+    // frame, since the job was said to be a screen recording.
+    let frame = agent.tool(
+        "shorts_preview",
+        json!({ "job": job, "clip": "c1", "format": "tall", "time": 1.0 }),
+    );
+    assert_eq!(frame["content"][0]["type"], "image");
+    assert_eq!(frame["structuredContent"]["width"], 180);
+    assert_eq!(frame["structuredContent"]["height"], 320);
+    assert!(
+        frame["structuredContent"]["note"]
+            .as_str()
+            .is_some_and(|note| note.contains("whole")),
+        "{frame}"
+    );
+    // The preview's project is put away again.
+    let projects = workspace.join(&job).join("projects");
+    let left: Vec<_> = std::fs::read_dir(&projects)
+        .map(|entries| entries.filter_map(Result::ok).collect())
+        .unwrap_or_default();
+    assert!(left.is_empty(), "{left:?}");
+
+    // The render, called until nothing is left, with progress on the way.
+    let mut rendered = json!(null);
+    for _ in 0..20 {
+        let (_, reply) = agent.ask(
+            "tools/call",
+            json!({
+                "name": "shorts_render",
+                "arguments": { "job": job, "timeoutSeconds": 60 },
+                "_meta": { "progressToken": "render" },
+            }),
+        );
+        rendered = reply["result"]["structuredContent"].clone();
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+        if rendered["rendersLeft"] == 0 {
+            break;
+        }
+    }
+    assert_eq!(rendered["rendersLeft"], 0, "{rendered}");
+    let render = &rendered["clips"][0]["renders"][0];
+    assert_eq!(render["format"], "tall");
+    // The project stays, to be opened in the window.
+    let project = render["project"].as_str().expect("a project");
+    assert!(Path::new(project).join("concat.json").is_file());
+    // A machine with no H.264 encoder cannot finish the export; it says
+    // so, and the render is failed, not lost.
+    if render["state"] == "done" {
+        let output = render["output"].as_str().expect("a file");
+        assert!(output.ends_with("01-the-middle-c1-tall.mp4"), "{output}");
+        assert!(Path::new(output).is_file());
+        // 2 s of footage and the end card's 2.5 s, to the frame.
+        let seconds = render["seconds"].as_f64().expect("a length");
+        assert!((4.3..=4.7).contains(&seconds), "{seconds}");
+        // Asked again, what is done is not done twice.
+        let again = agent.tool("shorts_render", json!({ "job": job }));
+        assert_eq!(again["structuredContent"]["rendersLeft"], 0);
+        assert_eq!(
+            again["structuredContent"]["clips"][0]["renders"][0]["project"],
+            *project
+        );
+    } else {
+        assert_eq!(render["state"], "failed", "{render}");
+        assert!(render["error"].is_string(), "{render}");
+    }
+
+    let listed = agent.tool("shorts_status", json!({}));
+    assert_eq!(listed["structuredContent"]["jobs"][0]["job"], job);
+    assert_eq!(listed["structuredContent"]["jobs"][0]["approved"], 1);
+    agent.end();
+}
+
 #[test]
 fn a_modern_client_discovers_and_is_told_which_versions_are_spoken() {
     let scratch = tempfile::tempdir().expect("scratch");
